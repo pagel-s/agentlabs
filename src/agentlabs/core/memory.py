@@ -504,4 +504,4 @@ def create_memory(memory_type: str, **kwargs) -> Memory:
 
 
 # Global memory store instance
-memory_store = create_memory("memory") 
+memory_store = create_memory("in_memory") 

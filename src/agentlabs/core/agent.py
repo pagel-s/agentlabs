@@ -17,7 +17,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from ..utils.config import LLMConfig
 from ..utils.logging import LoggerMixin, LoggedClass, log_async_function_call, log_async_execution_time
 from .llm import LLMProvider, LLMFactory, LLMResponse, LLMMessage
-from .memory import Memory, MemoryStore
+from .memory import Memory, MemoryManager
 from .tools import Tool, ToolRegistry, ToolResult
 
 
@@ -131,8 +131,8 @@ class Agent(LoggedClass):
         )
         
         # Initialize components
-        self.llm_provider = LLMFactory.create(config.llm_config)
-        self.memory = MemoryStore.create(config.memory_config or {})
+        self.llm_provider = LLMFactory.create_provider(config.llm_config)
+        self.memory_manager = MemoryManager()
         self.tool_registry = ToolRegistry()
         self.state = AgentState.IDLE
         
@@ -228,72 +228,57 @@ class Agent(LoggedClass):
             self.end_time = datetime.utcnow()
     
     async def _generate_response(self, **kwargs: Any) -> LLMResponse:
-        """Generate response from LLM."""
-        try:
-            # Add memory context if available
-            memory_context = await self.memory.get_context(self.context.session_id)
-            if memory_context:
-                self.messages.insert(1, SystemMessage(content=f"Memory context: {memory_context}"))
-            
-            # Add available tools information
-            if self.tool_registry.tools:
-                tools_info = self._format_tools_info()
-                self.messages.insert(1, SystemMessage(content=f"Available tools: {tools_info}"))
-            
-            response = await self.llm_provider.generate(
-                self.messages,
-                temperature=kwargs.get("temperature", self.config.temperature),
-                max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
-                **{k: v for k, v in kwargs.items() if k not in ["temperature", "max_tokens"]}
-            )
-            
-            # Add response to messages
-            self.messages.append(AIMessage(content=response.content))
-            
-            return response
+        """Generate a response from the LLM."""
+        # Convert BaseMessage to LLMMessage
+        llm_messages = []
+        for msg in self.messages:
+            if isinstance(msg, SystemMessage):
+                llm_messages.append(LLMMessage(role="system", content=str(msg.content)))
+            elif isinstance(msg, HumanMessage):
+                llm_messages.append(LLMMessage(role="user", content=str(msg.content)))
+            elif isinstance(msg, AIMessage):
+                llm_messages.append(LLMMessage(role="assistant", content=str(msg.content)))
+            else:
+                llm_messages.append(LLMMessage(role="user", content=str(msg.content)))
         
-        except Exception as e:
-            self.logger.error(f"Error generating response: {e}")
-            raise
+        return await self.llm_provider.generate(llm_messages, **kwargs)
     
     async def _process_response(self, response: LLMResponse) -> bool:
-        """Process LLM response and determine if execution should continue."""
-        try:
-            # Check for tool calls
-            tool_calls = self._extract_tool_calls(response.content)
+        """Process the LLM response and determine if execution should continue."""
+        # Add response to messages
+        self.messages.append(AIMessage(content=response.content))
+        
+        # Extract tool calls
+        tool_calls = self._extract_tool_calls(response.content)
+        
+        if tool_calls:
+            self.logger.debug(f"Found {len(tool_calls)} tool calls")
             
-            if tool_calls:
-                for tool_call in tool_calls:
+            for tool_call in tool_calls:
+                try:
                     result = await self._execute_tool_call(tool_call)
-                    self.tool_calls.append({
-                        "tool": tool_call["tool"],
-                        "args": tool_call["args"],
-                        "result": result,
-                        "iteration": self.current_iteration
-                    })
+                    self.tool_calls.append(tool_call)
                     
                     # Add tool result to messages
                     self.messages.append(HumanMessage(content=f"Tool result: {result}"))
-                
-                return True  # Continue execution after tool calls
-            
-            # Check for completion indicators
-            completion_indicators = [
-                "task completed",
-                "research complete",
-                "analysis finished",
-                "final answer",
-                "conclusion"
-            ]
-            
-            if any(indicator in response.content.lower() for indicator in completion_indicators):
-                return False  # Stop execution
+                    
+                except Exception as e:
+                    self.logger.error(f"Error executing tool call: {e}")
+                    self.messages.append(HumanMessage(content=f"Tool error: {str(e)}"))
             
             return True  # Continue execution
         
-        except Exception as e:
-            self.logger.error(f"Error processing response: {e}")
-            return False
+        # Check for completion indicators
+        completion_indicators = [
+            "task completed", "finished", "done", "complete",
+            "final answer", "conclusion", "summary"
+        ]
+        
+        content_lower = response.content.lower()
+        if any(indicator in content_lower for indicator in completion_indicators):
+            return False  # Stop execution
+        
+        return True  # Continue execution
     
     def _extract_tool_calls(self, content: str) -> List[Dict[str, Any]]:
         """Extract tool calls from response content."""
@@ -328,13 +313,13 @@ class Agent(LoggedClass):
             if not tool:
                 return f"Error: Tool '{tool_name}' not found"
             
-            self.log_debug(f"Executing tool '{tool_name}' with args: {args}")
+            self.logger.debug(f"Executing tool '{tool_name}' with args: {args}")
             result = await tool.execute(args)
             
             return str(result)
         
         except Exception as e:
-            self.log_error(f"Error executing tool call: {e}")
+            self.logger.error(f"Error executing tool call: {e}")
             return f"Error executing tool: {str(e)}"
     
     def _format_tools_info(self) -> str:
@@ -358,7 +343,7 @@ class Agent(LoggedClass):
         # Get the last AI message
         for message in reversed(self.messages):
             if isinstance(message, AIMessage):
-                return message.content
+                return str(message.content)
         
         return ""
     
@@ -380,17 +365,17 @@ class Agent(LoggedClass):
     async def stop(self) -> None:
         """Stop agent execution."""
         self.state = AgentState.STOPPED
-        self.log_info("Agent execution stopped by user")
+        self.logger.info("Agent execution stopped by user")
     
     async def pause(self) -> None:
         """Pause agent execution."""
         self.state = AgentState.PAUSED
-        self.log_info("Agent execution paused")
+        self.logger.info("Agent execution paused")
     
     async def resume(self) -> None:
         """Resume agent execution."""
         self.state = AgentState.RUNNING
-        self.log_info("Agent execution resumed")
+        self.logger.info("Agent execution resumed")
     
     def get_status(self) -> Dict[str, Any]:
         """Get current agent status."""

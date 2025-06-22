@@ -223,16 +223,17 @@ class TestSettings:
         assert isinstance(settings.logging, LoggingConfig)
         assert isinstance(settings.tools, ToolConfig)
     
-    def test_settings_custom_values(self):
+    def test_settings_custom_values(self, tmp_path):
         """Test settings with custom values."""
+        custom_data_dir = tmp_path / "custom_data"
         settings = Settings(
             app_name="CustomApp",
             debug=True,
-            data_dir="/custom/data"
+            data_dir=str(custom_data_dir)
         )
         assert settings.app_name == "CustomApp"
         assert settings.debug is True
-        assert settings.data_dir == "/custom/data"
+        assert settings.data_dir == str(custom_data_dir)
     
     def test_settings_data_dir_creation(self, tmp_path):
         """Test that data directory is created."""

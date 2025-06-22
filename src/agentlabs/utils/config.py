@@ -19,6 +19,7 @@ class LLMConfig(BaseSettings):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Sampling temperature")
     max_tokens: int = Field(default=4096, gt=0, description="Maximum tokens to generate")
     timeout: int = Field(default=60, gt=0, description="Request timeout in seconds")
+    retry_attempts: int = Field(default=3, ge=0, description="Number of retry attempts")
     
     @field_validator("provider")
     @classmethod

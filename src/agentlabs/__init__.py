@@ -9,13 +9,13 @@ __version__ = "0.1.0"
 __author__ = "Sebastian Pagel"
 
 # Core imports
-from .config import Config, LLMConfig, DatabaseConfig, RedisConfig, VectorStoreConfig
+from .utils.config import LLMConfig, DatabaseConfig, RedisConfig, VectorStoreConfig
 from .core.agent import Agent, AgentConfig, AgentRole, AgentContext, AgentFactory
 from .core.tools import Tool, ToolRegistry, ToolResult, ToolSchema
-from .core.memory import Memory, InMemoryMemory, FileMemory, ContextAwareMemory
-from .core.providers import LLMProvider, OpenAIProvider, AnthropicProvider, LocalProvider
-from .projects import Project, ProjectManager, ResearchTask, TaskPriority, TaskStatus
-from .workflows import Workflow, WorkflowEngine, WorkflowStep, WorkflowStepType
+from .core.memory import Memory, InMemoryMemory, FileMemory, RedisMemory, MemoryManager
+from .core.llm import LLMProvider, LLMFactory, LLMResponse, LLMMessage
+from .core.project import Project, ProjectManager, ResearchTask, TaskPriority, TaskStatus
+from .core.workflow import Workflow, WorkflowEngine, WorkflowStep, WorkflowStepType
 from .utils.logging import setup_logging, get_logger
 
 # CLI
@@ -50,13 +50,14 @@ __all__ = [
     "Memory",
     "InMemoryMemory",
     "FileMemory",
-    "ContextAwareMemory",
+    "RedisMemory",
+    "MemoryManager",
     
     # Providers
     "LLMProvider",
-    "OpenAIProvider",
-    "AnthropicProvider",
-    "LocalProvider",
+    "LLMFactory",
+    "LLMResponse",
+    "LLMMessage",
     
     # Projects
     "Project",
@@ -78,6 +79,3 @@ __all__ = [
     # CLI
     "main",
 ]
-
-def main() -> None:
-    print("Hello from agentlabs!")

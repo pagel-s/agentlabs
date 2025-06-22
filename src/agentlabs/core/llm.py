@@ -8,7 +8,8 @@ from dataclasses import dataclass
 import openai
 import anthropic
 from tenacity import retry, stop_after_attempt, wait_exponential
-from langchain.chat_models import ChatOpenAI, ChatAnthropic
+from langchain_openai.chat_models import ChatOpenAI
+from langchain_anthropic.chat_models import ChatAnthropic
 from langchain.schema import BaseMessage, HumanMessage, SystemMessage, AIMessage
 from pydantic import BaseModel, Field
 
@@ -46,7 +47,7 @@ class LLMProvider(ABC, LoggedClass):
         self.max_tokens = config.max_tokens
         self.timeout = config.timeout
         self.retry_attempts = config.retry_attempts
-        self.log_info(f"Initialized {self.__class__.__name__} with model {config.model}")
+        self.logger.info(f"Initialized {self.__class__.__name__} with model {config.model}")
     
     @abstractmethod
     async def generate(self, messages: List[LLMMessage], **kwargs) -> LLMResponse:
@@ -85,14 +86,6 @@ class OpenAIProvider(LLMProvider):
             base_url=config.base_url,
             timeout=config.timeout
         )
-        
-        self.langchain_model = ChatOpenAI(
-            model=config.model,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            openai_api_key=config.api_key,
-            openai_api_base=config.base_url,
-        )
     
     @log_async_function_call
     @log_async_execution_time
@@ -102,14 +95,12 @@ class OpenAIProvider(LLMProvider):
         self._validate_messages(messages)
         
         # Convert messages to OpenAI format
-        openai_messages = [
-            {
-                "role": msg.role,
-                "content": msg.content,
-                **({"name": msg.name} if msg.name else {})
-            }
-            for msg in messages
-        ]
+        openai_messages = []
+        for msg in messages:
+            message_dict = {"role": msg.role, "content": msg.content}
+            if msg.name:
+                message_dict["name"] = msg.name
+            openai_messages.append(message_dict)
         
         try:
             response = await self.client.chat.completions.create(
@@ -140,14 +131,12 @@ class OpenAIProvider(LLMProvider):
         """Generate a streaming response using OpenAI API."""
         self._validate_messages(messages)
         
-        openai_messages = [
-            {
-                "role": msg.role,
-                "content": msg.content,
-                **({"name": msg.name} if msg.name else {})
-            }
-            for msg in messages
-        ]
+        openai_messages = []
+        for msg in messages:
+            message_dict = {"role": msg.role, "content": msg.content}
+            if msg.name:
+                message_dict["name"] = msg.name
+            openai_messages.append(message_dict)
         
         try:
             stream = await self.client.chat.completions.create(
@@ -182,13 +171,6 @@ class AnthropicProvider(LLMProvider):
             api_key=config.api_key,
             base_url=config.base_url
         )
-        
-        self.langchain_model = ChatAnthropic(
-            model=config.model,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            anthropic_api_key=config.api_key,
-        )
     
     @log_async_function_call
     @log_async_execution_time
@@ -211,14 +193,20 @@ class AnthropicProvider(LLMProvider):
                 })
         
         try:
-            response = await self.client.messages.create(
-                model=self.model,
-                messages=anthropic_messages,
-                system=system_message,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
+            # Prepare API call parameters
+            api_params = {
+                "model": self.model,
+                "messages": anthropic_messages,
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
                 **kwargs
-            )
+            }
+            
+            # Only add system parameter if it exists
+            if system_message:
+                api_params["system"] = system_message
+            
+            response = await self.client.messages.create(**api_params)
             
             return LLMResponse(
                 content=response.content[0].text,
@@ -252,15 +240,21 @@ class AnthropicProvider(LLMProvider):
                 })
         
         try:
-            stream = await self.client.messages.create(
-                model=self.model,
-                messages=anthropic_messages,
-                system=system_message,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                stream=True,
+            # Prepare API call parameters
+            api_params = {
+                "model": self.model,
+                "messages": anthropic_messages,
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "stream": True,
                 **kwargs
-            )
+            }
+            
+            # Only add system parameter if it exists
+            if system_message:
+                api_params["system"] = system_message
+            
+            stream = await self.client.messages.create(**api_params)
             
             async for chunk in stream:
                 if chunk.type == "content_block_delta":
